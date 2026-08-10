@@ -1,0 +1,2187 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FBX Viewer — Unreal-like</title>
+<style>
+  :root{
+    --panel-bg: rgba(20,22,26,0.72);
+    --panel-border: rgba(255,255,255,0.08);
+    --text: #e8e9ec;
+    --accent: #6aa9ff;
+  }
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color:var(--text);}
+  #app{position:fixed;inset:0;}
+  canvas{display:block;outline:none;}
+
+  #dropzone{
+    position:fixed;inset:0;z-index:50;display:none;
+    align-items:center;justify-content:center;
+    background:rgba(10,12,16,0.55);backdrop-filter:blur(3px);
+    border: 3px dashed var(--accent);
+  }
+  #dropzone.active{display:flex;}
+  #dropzone span{font-size:22px;padding:18px 26px;background:var(--panel-bg);border-radius:12px;border:1px solid var(--panel-border);}
+
+  #topbar{
+    position:fixed;top:12px;left:12px;z-index:20;
+    display:flex;gap:8px;align-items:center;
+  }
+  .btn{
+    background:var(--panel-bg);border:1px solid var(--panel-border);color:var(--text);
+    padding:9px 14px;border-radius:10px;font-size:13px;cursor:pointer;
+    backdrop-filter: blur(8px);
+    transition:border-color .15s ease;
+  }
+  .btn:hover{border-color:var(--accent);}
+  #hdriInput{display:none;}
+
+  #status{
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+    z-index:40;display:none;
+    background:var(--panel-bg);border:1px solid var(--panel-border);
+    backdrop-filter:blur(10px);
+    padding:18px 22px;border-radius:12px;
+    font-size:14px;line-height:1.6;max-width:520px;text-align:center;
+    box-shadow:0 18px 50px rgba(0,0,0,.55);
+  }
+  #status.error{border-color:rgba(255,120,120,.55);}
+  #status .path{opacity:.6;font-size:12px;word-break:break-all;}
+  #status code{
+    background:rgba(255,255,255,.08);padding:2px 6px;border-radius:5px;font-size:12px;
+  }
+  #status code.cmd{display:inline-block;margin-top:6px;padding:6px 10px;text-align:left;}
+  a.btn{text-decoration:none;display:inline-block;}
+  #modelName{
+    font-size:13px;opacity:.75;padding:0 4px 0 2px;
+    max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+
+  #hint{
+    position:fixed;bottom:12px;left:12px;z-index:20;
+    background:var(--panel-bg);border:1px solid var(--panel-border);
+    padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.5;
+    backdrop-filter: blur(8px); max-width:360px; opacity:0.85;
+  }
+
+  #stats{
+    position:fixed;bottom:12px;right:12px;z-index:20;
+    background:var(--panel-bg);border:1px solid var(--panel-border);
+    padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.6;
+    backdrop-filter: blur(8px); min-width:150px; text-align:right;
+  }
+
+  #animPanel{
+    position:fixed;top:12px;right:12px;z-index:20;
+    background:var(--panel-bg);border:1px solid var(--panel-border);
+    padding:10px 12px;border-radius:10px;font-size:12px;
+    backdrop-filter: blur(8px); display:none; min-width:220px;
+  }
+  #animPanel select{width:100%;margin:6px 0;background:#1a1c20;color:var(--text);border:1px solid var(--panel-border);border-radius:6px;padding:4px;}
+  #animPanel .row{display:flex;align-items:center;gap:8px;margin-top:6px;}
+  #animPanel input[type=range]{flex:1;}
+
+  #loadingBar{
+    position:fixed;top:0;left:0;height:3px;background:var(--accent);z-index:60;
+    width:0%; transition:width .2s ease; box-shadow:0 0 8px var(--accent);
+  }
+
+  .lil-gui{ --width: 300px; }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="loadingBar"></div>
+
+  <div id="dropzone"><span>Отпустите панораму .exr / .hdr сюда</span></div>
+
+  <div id="topbar">
+    <a class="btn" id="btnBack" href="index.html">← Галерея</a>
+    <span id="modelName"></span>
+    <button class="btn" id="btnFrame">🎯 Кадрировать</button>
+    <button class="btn" id="btnShot">📷 Скриншот</button>
+    <button class="btn" id="btnHdri">🌅 HDRI</button>
+    <input type="file" id="hdriInput" accept=".exr,.hdr" />
+  </div>
+
+  <div id="animPanel">
+    <b>Анимация</b>
+    <select id="animSelect"></select>
+    <div class="row">
+      <button class="btn" id="animPlay" style="padding:5px 10px;">⏵/⏸</button>
+      <input type="range" id="animSpeed" min="0" max="2" step="0.05" value="1" />
+      <span id="animSpeedLabel">1.0×</span>
+    </div>
+  </div>
+
+  <div id="hint">
+    ЛКМ — вращение, ПКМ — панорама, колесо — зум к точке под курсором.<br/>
+    Панораму <b>.exr / .hdr</b> можно перетащить прямо в окно.
+  </div>
+
+  <div id="status"></div>
+
+  <div id="stats">
+    <div id="statFps">FPS: —</div>
+    <div id="statTris">Tris: —</div>
+  </div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+    "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.20.0/dist/lil-gui.esm.min.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import GUI from 'lil-gui';
+
+/* =========================================================================
+   FBX VIEWER — цель: приблизить картинку к Unreal Engine (без Lumen/Nanite)
+   средствами three.js:
+     - процедурное небо + солнце (Sky.js) + IBL через PMREM от неба
+     - объёмные облака (raymarch) с тенью от них на земле
+     - мягкие тени PCSS с контактным ужесточением
+     - объёмный свет (лучи солнца) с выборкой из shadow map
+     - экранный проход ambient occlusion по буферам глубины и нормалей
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   PCSS — мягкие тени с «контактным ужесточением»
+   -------------------------------------------------------------------------
+   Штатные режимы теней three.js для нашей задачи не годятся:
+     - PCFSoftShadowMap даёт постоянное размытие в 1-2 текселя: тень одинаково
+       чуть-чуть мягкая и у самого основания стены, и на 50 метрах от неё;
+     - VSMShadowMap умеет регулируемую мягкость, но хранит моменты глубины в
+       half-float. На архитектурной сцене (сотни метров глубины) точности не
+       хватает, начинается light bleeding, и тень попросту исчезает.
+
+   Здесь — PCSS: сначала ищем "блокеры" (что заслоняет солнце), по средней
+   дистанции до них считаем ширину полутени и уже с этим радиусом делаем PCF.
+   Чем дальше объект от поверхности, тем мягче его тень, — как в жизни и как
+   в Unreal. Солнце — направленный источник, поэтому ширина полутени берётся
+   не по перспективной формуле из классического PCSS, а физически:
+       ширина = расстояние_до_блокера * tan(углового_размера_солнца)
+   (у настоящего Солнца угловой размер ≈ 0.53°).
+
+   Параметры зашиваются в шейдер через #define и зависят от масштаба сцены,
+   поэтому чанк пересобирается при загрузке модели и при смене мягкости —
+   то есть редко, а не каждый кадр.
+   ------------------------------------------------------------------------- */
+const ORIGINAL_SHADOW_CHUNK = THREE.ShaderChunk.shadowmap_pars_fragment;
+
+function buildPCSSChunk({ frustumWidth, depthRange, tanLightAngle, mapSize,
+                         blockerSamples, filterSamples }) {
+  const minRadiusUV = 1.0 / mapSize;                 // не уже одного текселя
+  const maxRadiusUV = Math.min(0.05, 24.0 / mapSize * 4.0); // потолок радиуса поиска
+
+  const PCSS = /* glsl */`
+  #define PCSS_BLOCKER_SAMPLES ${blockerSamples}
+  #define PCSS_FILTER_SAMPLES ${filterSamples}
+  #define PCSS_FRUSTUM_WIDTH ${frustumWidth.toFixed(4)}
+  #define PCSS_DEPTH_RANGE ${depthRange.toFixed(4)}
+  #define PCSS_TAN_LIGHT_ANGLE ${tanLightAngle.toFixed(6)}
+  #define PCSS_MIN_RADIUS_UV ${minRadiusUV.toFixed(8)}
+  #define PCSS_MAX_RADIUS_UV ${maxRadiusUV.toFixed(8)}
+
+  // Диск Фогеля: равномерные точки по спирали, без таблиц-констант.
+  vec2 pcssDisk( const in int i, const in int n, const in float phi ) {
+    float r = sqrt( ( float( i ) + 0.5 ) / float( n ) );
+    float theta = float( i ) * 2.39996323 + phi;
+    return vec2( r * cos( theta ), r * sin( theta ) );
+  }
+
+  float pcssNoise( const in vec2 p ) {
+    return fract( sin( dot( p, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
+  }
+
+  // Средняя глубина того, что заслоняет источник. -1.0 = блокеров нет.
+  float pcssFindBlocker( sampler2D shadowMap, const in vec2 uv, const in float zReceiver, const in float phi ) {
+    float sum = 0.0;
+    float count = 0.0;
+    for ( int i = 0; i < PCSS_BLOCKER_SAMPLES; i ++ ) {
+      vec2 offset = pcssDisk( i, PCSS_BLOCKER_SAMPLES, phi ) * PCSS_MAX_RADIUS_UV;
+      float z = unpackRGBAToDepth( texture2D( shadowMap, uv + offset ) );
+      if ( z < zReceiver ) { sum += z; count += 1.0; }
+    }
+    if ( count < 1.0 ) return -1.0;
+    return sum / count;
+  }
+
+  float PCSS( sampler2D shadowMap, const in vec4 shadowCoord ) {
+    vec2 uv = shadowCoord.xy;
+    float zReceiver = shadowCoord.z;
+    float phi = pcssNoise( gl_FragCoord.xy ) * 6.28318531;
+
+    float avgBlocker = pcssFindBlocker( shadowMap, uv, zReceiver, phi );
+    if ( avgBlocker < 0.0 ) return 1.0;   // ничего не заслоняет — полный свет
+
+    // расстояние от поверхности до заслоняющего объекта в мировых единицах
+    float distToBlocker = max( ( zReceiver - avgBlocker ) * PCSS_DEPTH_RANGE, 0.0 );
+    float penumbraWorld = distToBlocker * PCSS_TAN_LIGHT_ANGLE;
+    float radiusUV = clamp( penumbraWorld / PCSS_FRUSTUM_WIDTH, PCSS_MIN_RADIUS_UV, PCSS_MAX_RADIUS_UV );
+
+    float sum = 0.0;
+    for ( int i = 0; i < PCSS_FILTER_SAMPLES; i ++ ) {
+      vec2 offset = pcssDisk( i, PCSS_FILTER_SAMPLES, phi ) * radiusUV;
+      float z = unpackRGBAToDepth( texture2D( shadowMap, uv + offset ) );
+      sum += ( z < zReceiver ) ? 0.0 : 1.0;
+    }
+    return sum / float( PCSS_FILTER_SAMPLES );
+  }
+  `;
+
+  let chunk = ORIGINAL_SHADOW_CHUNK;
+  // 1) объявляем функции сразу после открытия блока USE_SHADOWMAP
+  chunk = chunk.replace('#ifdef USE_SHADOWMAP', '#ifdef USE_SHADOWMAP' + PCSS);
+  // 2) внутри getShadow выходим раньше штатной PCF/VSM-развилки.
+  //    Первое вхождение этой строки — как раз тело getShadow (дальше по чанку
+  //    идёт getPointShadow, там строка другая, с "|| defined( ... )").
+  chunk = chunk.replace(
+    '#if defined( SHADOWMAP_TYPE_PCF )',
+    'return PCSS( shadowMap, shadowCoord );\n#if defined( SHADOWMAP_TYPE_PCF )'
+  );
+  return chunk;
+}
+
+// Пересобрать шейдер теней и заставить материалы перекомпилироваться.
+let pcssApplied = null;
+function applyShadowShader(opts) {
+  const key = JSON.stringify(opts) + ':' + params.pcss;
+  if (key === pcssApplied) return;
+  pcssApplied = key;
+
+  if (params.pcss) {
+    const chunk = buildPCSSChunk(opts);
+    if (chunk === ORIGINAL_SHADOW_CHUNK) {
+      console.warn('PCSS: не удалось пропатчить shadowmap_pars_fragment — ' +
+                   'осталась штатная реализация теней three.js.');
+    }
+    THREE.ShaderChunk.shadowmap_pars_fragment = chunk;
+  } else {
+    THREE.ShaderChunk.shadowmap_pars_fragment = ORIGINAL_SHADOW_CHUNK;
+  }
+
+  scene.traverse((o) => {
+    if (!o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    mats.forEach((m) => { if (m) m.needsUpdate = true; });
+  });
+}
+
+const container = document.getElementById('app');
+
+// ---------- Renderer ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.55;
+renderer.shadowMap.enabled = true;
+// Карта глубины пакуется в RGBA (как для PCF) — именно её читает наш PCSS.
+renderer.shadowMap.type = THREE.PCFShadowMap;
+// Сцена статична, поэтому карту теней перерисовываем по событию, а не каждый
+// кадр (см. requestShadowUpdate). Для анимации режим переключается обратно.
+renderer.shadowMap.autoUpdate = false;
+container.appendChild(renderer.domElement);
+
+// ---------- Scene / Camera ----------
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.05, 5000);
+camera.position.set(3.2, 2.1, 4.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0.9, 0);
+controls.minDistance = 0.2;
+controls.maxDistance = 400;
+// Колесо приближает к точке под курсором и двигает саму точку вращения.
+// Без этого зум упирается в target: подъехать вплотную к детали на краю
+// модели было невозможно, приближение всегда шло в один и тот же центр.
+controls.zoomToCursor = true;
+controls.update();
+
+// ---------- Sky + Sun ----------
+const sky = new Sky();
+sky.scale.setScalar(450000);
+scene.add(sky);
+
+const skyUniforms = sky.material.uniforms;
+skyUniforms['turbidity'].value = 2.4;
+skyUniforms['rayleigh'].value = 1.1;
+skyUniforms['mieCoefficient'].value = 0.003;
+skyUniforms['mieDirectionalG'].value = 0.85;
+
+// Sky.js отдаёт довольно "горячие" значения: при экспозиции, подобранной под
+// модель, небо уходит в белый и вся картинка выглядит выцветшей. Своего
+// множителя яркости у него нет — добавляем uniform прямо в шейдер.
+skyUniforms['skyIntensity'] = { value: 0.45 };
+const SKY_OUT = 'gl_FragColor = vec4( retColor, 1.0 );';
+if (sky.material.fragmentShader.includes(SKY_OUT)) {
+  sky.material.fragmentShader = sky.material.fragmentShader
+    .replace('void main() {', 'uniform float skyIntensity;\nvoid main() {')
+    // Альфа неба намеренно 0. Купол непрозрачен и рисуется первым, так что на
+    // картинку это не влияет, зато альфа-канал буфера освобождается под
+    // непрозрачность облаков: они рисуются поверх с premultiplied-блендингом,
+    // и в альфе остаётся ровно "насколько облако закрывает небо". Этим потом
+    // пользуется проход лучей солнца — иначе лучи били бы сквозь тучи.
+    .replace(SKY_OUT, 'gl_FragColor = vec4( retColor * skyIntensity, 0.0 );');
+  sky.material.needsUpdate = true;
+} else {
+  console.warn('Sky.js: не удалось встроить skyIntensity — ползунок яркости неба работать не будет.');
+}
+
+const sunPosition = new THREE.Vector3();
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+pmremGenerator.compileEquirectangularShader();
+
+const params = {
+  elevation: 45.4,
+  azimuth: 127,
+  exposure: 0.55,
+  // Баланс солнце/небо. Небо специально приглушено (0.23), а вклад солнца и
+  // IBL подняты при низкой экспозиции: так небо не уходит в белый, а модель
+  // остаётся контрастной, с читаемыми тенями.
+  sunIntensity: 10,
+  skyIntensity: 0.23,    // яркость самого купола неба (и, как следствие, IBL)
+  envIntensity: 1.76,    // сила света от неба (IBL)
+  pcss: true,            // мягкие тени с контактным ужесточением
+  sunAngle: 1.2,         // угловой размер солнца в градусах (реальный ≈ 0.53)
+  shadowMapSize: 4096,
+  ao: {
+    radius: 20,   // пиксели
+    strength: 0.55,
+  },
+  material: {
+    roughness: 0.6,
+    metalness: 0.02,
+    overrideEnabled: false,
+    // В части FBX-пайплайнов канал "_r" хранит glossiness, а не PBR-roughness
+    // (white = глянец). Действует на СЛЕДУЮЩУЮ загрузку модели.
+    // По умолчанию ВЫКЛЮЧЕНО: в проверенных файлах этого генератора "_r" —
+    // обычная roughness (карта почти белая, т.е. поверхность шершавая), и
+    // инверсия делала из всех стен зеркала, отражающие небо, — отсюда была
+    // сплошная белая "засветка" вместо текстур.
+    invertRoughness: false,
+  },
+  ground: true,
+  fog: true,
+  autoRotate: false,
+  toneMapping: 'aces',
+  // 'sky' — процедурное небо, 'hdri' — загруженная панорама .exr/.hdr
+  envSource: 'sky',
+  hdri: {
+    showBackground: true,
+    blur: 0.0,
+    bgIntensity: 1.0,
+    rotation: 0,
+  },
+  volumetric: {
+    // Самый тяжёлый из оставшихся проходов: марш по лучу взгляда с выборкой
+    // из карты теней на каждом шаге. По умолчанию выключен — включать стоит
+    // осознанно и только на мощной машине.
+    enabled: false,
+    intensity: 1.2,
+    density: 1.0,
+    heightFalloff: 3.0,   // высота, на которой дымка спадает в e раз (радиусы сцены)
+    maxDistance: 8,       // дальность марша (радиусы сцены)
+    steps: 40,
+    anisotropy: 0.72,     // g: насколько сильно свет рассеивается «вперёд»
+  },
+  // Пресет качества: подбирается автоматически по первым кадрам, но его
+  // всегда можно переключить руками.
+  quality: 'auto',
+};
+
+/* -------------------------------------------------------------------------
+   Качество
+   -------------------------------------------------------------------------
+   На слабой видеокарте вьюер упирался в 4 FPS. Дело не в одной какой-то
+   функции, а в сумме: рендер в двойном разрешении экрана, сглаживание 4x,
+   карта теней 4096 с полусотней выборок PCSS на каждый пиксель — и всё это
+   поверх сцены в полмиллиона треугольников, которая ещё и рисуется дважды
+   (основной проход плюс проход нормалей для AO).
+
+   Поэтому здесь три уровня, а не «включить/выключить». Уровень подбирается
+   сам по реальной частоте кадров и понижается, если машина не тянет.
+   ------------------------------------------------------------------------- */
+/* Замер на реальной сцене (531 тыс. треугольников, кадр 1080p):
+     разрешение 1920x1080 — 34 мс      AO   — 3 мс
+     разрешение 1280x720  — 18 мс      MSAA — 5 мс
+     разрешение  960x540  — 12 мс
+   То есть решает именно разрешение, всё остальное — мелочь на его фоне.
+   Отсюда и главный параметр уровня: pixelRatio. Раньше он был жёстко
+   min(devicePixelRatio, 2), и на ноутбуке с ретиной кадр 1080p считался
+   в 3840x2160 — вчетверо дороже. Это и давало 4 FPS. */
+const QUALITY_PRESETS = {
+  low: {
+    // рендер ниже родного разрешения с растяжением — картинка мягче,
+    // зато кадр дешевле вдвое
+    label: 'Низкое', pixelRatio: 0.7, shadowMapSize: 1024, msaa: 0,
+    pcssBlocker: 8, pcssFilter: 8, ao: false, volumetric: false,
+  },
+  medium: {
+    label: 'Среднее', pixelRatio: 1, shadowMapSize: 2048, msaa: 2,
+    pcssBlocker: 12, pcssFilter: 16, ao: true, volumetric: false,
+  },
+  high: {
+    label: 'Высокое', pixelRatio: 2, shadowMapSize: 4096, msaa: 4,
+    pcssBlocker: 24, pcssFilter: 24, ao: true, volumetric: false,
+  },
+};
+const QUALITY_ORDER = ['low', 'medium', 'high'];
+let activePresetName = 'medium';
+let activePreset = QUALITY_PRESETS.medium;
+
+let envRT = null;
+let hdriTexture = null;   // исходная равнопромежуточная панорама (.exr/.hdr)
+let hdriPMREM = null;     // она же, свёрнутая PMREM для освещения
+let hdriName = '';
+
+function updateSun() {
+  const phi = THREE.MathUtils.degToRad(90 - params.elevation);
+  const theta = THREE.MathUtils.degToRad(params.azimuth);
+  sunPosition.setFromSphericalCoords(1, phi, theta);
+  skyUniforms['sunPosition'].value.copy(sunPosition);
+
+  // Дистанция до источника фиксирована относительно размера сцены и НЕ зависит
+  // от угла солнца. Благодаря этому размеры shadow-фрустума постоянны, и
+  // PCSS-шейдер (в него они зашиты через #define) не нужно пересобирать
+  // при каждом движении ползунка солнца.
+  const dist = shadowDistance();
+  sunLight.position.copy(sunPosition).multiplyScalar(dist).add(sceneTarget);
+  sunLight.target.position.copy(sceneTarget);
+  sunLight.target.updateMatrixWorld();
+  fitShadowFrustum();
+
+  updateEnvironment();
+}
+
+/* Окружение (IBL) — либо процедурное небо, либо загруженная HDRI-панорама.
+   Пересобирается редко: при смене солнца или при загрузке панорамы. */
+function updateEnvironment() {
+  scene.environmentIntensity = params.envIntensity;
+  // юниформ неба создаётся раньше объекта params, держим их в согласии здесь
+  skyUniforms['skyIntensity'].value = params.skyIntensity;
+
+  if (params.envSource === 'hdri' && hdriPMREM) {
+    sky.visible = false;
+    scene.environment = hdriPMREM.texture;
+    scene.background = params.hdri.showBackground ? hdriTexture : null;
+    scene.backgroundBlurriness = params.hdri.blur;
+    scene.backgroundIntensity = params.hdri.bgIntensity;
+    scene.backgroundRotation.y = THREE.MathUtils.degToRad(params.hdri.rotation);
+    scene.environmentRotation.y = THREE.MathUtils.degToRad(params.hdri.rotation);
+    return;
+  }
+
+  sky.visible = true;
+  scene.background = null;
+
+  // Фон сцены — сам процедурный купол неба (sky остаётся видимым мешем в кадре).
+  if (envRT) envRT.dispose();
+  envRT = pmremGenerator.fromScene(sky, 0.04);
+  scene.environment = envRT.texture;
+}
+
+// ---------- Sun light (directional) ----------
+const sunLight = new THREE.DirectionalLight(0xffffff, params.sunIntensity);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(params.shadowMapSize, params.shadowMapSize);
+scene.add(sunLight);
+scene.add(sunLight.target);
+
+let sceneRadius = 3;
+let sceneTarget = new THREE.Vector3(0, 0.9, 0);
+let sceneGroundY = 0;   // уровень земли: от него отсчитывается плотность дымки
+
+// Расстояние от центра сцены до источника. Достаточно большое, чтобы весь
+// объём сцены помещался между near и far shadow-камеры при любом угле солнца.
+function shadowDistance() { return sceneRadius * 2.5; }
+
+function fitShadowFrustum() {
+  const r = sceneRadius;
+  const dist = shadowDistance();
+  const cam = sunLight.shadow.camera;
+
+  // Ортографический фрустум — куб со стороной 2r вокруг центра сцены.
+  // near/far прижаты к сцене: раньше был диапазон 0.1..8r, из-за чего
+  // на глубину сцены приходились единицы процентов точности карты.
+  cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
+  cam.near = Math.max(dist - r * 1.05, r * 0.01);
+  cam.far = dist + r * 1.05;
+  cam.updateProjectionMatrix();
+
+  // Смещения от acne масштабируются размером текселя в мировых единицах,
+  // иначе на большой сцене они либо ничего не делают, либо съедают тень.
+  // 4 текселя: при низком солнце свет скользит вдоль крыш почти по касательной,
+  // и на двух текселях они покрывались муаром самозатенения (acne).
+  const texelWorld = (2 * r) / params.shadowMapSize;
+  sunLight.shadow.bias = -0.00005;
+  sunLight.shadow.normalBias = texelWorld * 4.0;
+
+  applyShadowShader({
+    frustumWidth: 2 * r,
+    depthRange: cam.far - cam.near,
+    tanLightAngle: Math.tan(THREE.MathUtils.degToRad(params.sunAngle)),
+    mapSize: params.shadowMapSize,
+    blockerSamples: activePreset.pcssBlocker,
+    filterSamples: activePreset.pcssFilter,
+  });
+
+  requestShadowUpdate();
+}
+
+/* Карта теней перерисовывается не каждый кадр, а только когда есть что
+   перерисовывать. Это самая дорогая скрытая статья расхода: сцена в полмиллиона
+   треугольников заново рендерилась в карту 60 раз в секунду, хотя ни модель,
+   ни солнце обычно не двигаются. Обновляем по событию — загрузка модели,
+   поворот солнца, смена разрешения карты; для анимации включаем постоянный
+   режим отдельно. */
+function requestShadowUpdate() {
+  renderer.shadowMap.needsUpdate = true;
+}
+
+// ---------- Ground ----------
+function makeCheckerTexture() {
+  const size = 512;
+  const cvs = document.createElement('canvas');
+  cvs.width = cvs.height = size;
+  const ctx = cvs.getContext('2d');
+  const cell = size / 8;
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      ctx.fillStyle = (x + y) % 2 === 0 ? '#8d8d8d' : '#787878';
+      ctx.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(120, 120);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+const checkerTexture = makeCheckerTexture();
+const groundMat = new THREE.MeshStandardMaterial({
+  map: checkerTexture,
+  roughness: 0.95,
+  metalness: 0.0,
+});
+
+/* У модели может быть собственная земля (площадка, стилобат, рельеф). Тогда
+   клетка вьюера под ней не нужна — она спорит по глубине и лезет в кадр
+   чужой яркостью. Но и убирать плоскость совсем плохо: за краем модели
+   оказывается пустое небо, и объект «висит в белом». Поэтому плоскость
+   остаётся, но становится ровной нейтральной поверхностью — просто горизонт. */
+let groundIsNeutral = false;
+function setGroundStyle(neutral) {
+  groundIsNeutral = neutral;
+  groundMat.map = neutral ? null : checkerTexture;
+  groundMat.color.set(neutral ? 0x7c8288 : 0xffffff);
+  groundMat.needsUpdate = true;
+}
+// Плоскость земли сделана намного больше дальности тумана — край плоскости
+// всегда полностью скрыт в тумане, поэтому не виден жёсткий обрез горизонта.
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ---------- Fog (лёгкая атмосферная перспектива, как в Unreal-сценах) ----------
+scene.fog = new THREE.Fog(0xd8e6ff, 25, 190);
+
+// ---------- Демонстрационная стартовая сцена ----------
+// Набор примитивов: показывает мягкие тени и контактное затемнение на
+// выпуклых и вогнутых формах, плюс два НЕ сшитых плейна, образующих угол.
+const demoGroup = new THREE.Group();
+demoGroup.name = '__demo__';
+
+function stdMat(color, rough, metal) {
+  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
+}
+
+const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.5, 64, 64), stdMat(0xd6d6d6, 0.35, 0.05));
+sphere.position.set(-1.3, 0.5, 0);
+sphere.castShadow = sphere.receiveShadow = true;
+demoGroup.add(sphere);
+
+const torus = new THREE.Mesh(new THREE.TorusKnotGeometry(0.35, 0.12, 180, 24), stdMat(0xb9c8ff, 0.3, 0.6));
+torus.position.set(1.3, 0.55, 0);
+torus.castShadow = torus.receiveShadow = true;
+demoGroup.add(torus);
+
+const box = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), stdMat(0xffd9a0, 0.55, 0.0));
+box.position.set(0, 0.35, 1.4);
+box.castShadow = box.receiveShadow = true;
+demoGroup.add(box);
+
+// Два НЕ сшитых плейна образуют внутренний угол
+const cornerMat = stdMat(0xe3e3e3, 0.75, 0.0);
+const wallA = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2), cornerMat);
+wallA.position.set(-0.9, 0.6, -1.6);
+wallA.rotation.y = Math.PI / 2 + 0.001; // намеренно не идеально состыкован
+wallA.receiveShadow = wallA.castShadow = true;
+demoGroup.add(wallA);
+
+const wallB = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2), cornerMat.clone());
+wallB.position.set(-0.1, 0.6, -1.6);
+wallB.receiveShadow = wallB.castShadow = true;
+demoGroup.add(wallB);
+
+scene.add(demoGroup);
+
+sceneRadius = 3;
+sceneTarget.set(0, 0.6, 0);
+applySceneScale(null);
+
+// ---------- Normal+Depth pre-pass (для AO и объёмного света) ----------
+let pixelW = 0, pixelH = 0;
+const normalMaterial = new THREE.MeshNormalMaterial();
+let depthTexture, normalTarget;
+
+function buildNormalTarget(w, h) {
+  if (normalTarget) normalTarget.dispose();
+  depthTexture = new THREE.DepthTexture(w, h);
+  depthTexture.type = THREE.UnsignedIntType;
+  normalTarget = new THREE.WebGLRenderTarget(w, h, {
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    type: THREE.HalfFloatType,
+    depthTexture,
+  });
+}
+
+// ---------- Ambient occlusion (экранный проход) ----------
+class AOPass extends Pass {
+  constructor(camera) {
+    super();
+    this.camera = camera;
+    this.uniforms = {
+      tDiffuse: { value: null },
+      tNormal: { value: null },
+      tDepth: { value: null },
+      resolution: { value: new THREE.Vector2(1, 1) },
+      projectionMatrixInverse: { value: new THREE.Matrix4() },
+      aoRadius: { value: params.ao.radius },
+      aoStrength: { value: params.ao.strength },
+    };
+    this.material = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        varying vec2 vUv;
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tNormal;
+        uniform sampler2D tDepth;
+        uniform vec2 resolution;
+        uniform mat4 projectionMatrixInverse;
+        uniform float aoRadius;
+        uniform float aoStrength;
+
+        float ign(vec2 p) {
+          return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+        }
+
+        vec3 viewPosFromDepth(vec2 uv, float depth) {
+          vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+          vec4 vp = projectionMatrixInverse * ndc;
+          return vp.xyz / vp.w;
+        }
+
+        void main() {
+          // альфа несёт непрозрачность облаков — её нельзя затирать,
+          // она нужна проходу лучей солнца
+          vec4 src = texture2D(tDiffuse, vUv);
+          vec3 baseColor = src.rgb;
+          float centerDepth = texture2D(tDepth, vUv).r;
+
+          // пиксели неба/фона (дальняя плоскость) не трогаем
+          if (centerDepth >= 0.9999) {
+            gl_FragColor = vec4(baseColor, src.a);
+            return;
+          }
+
+          vec3 centerNormal = normalize(texture2D(tNormal, vUv).rgb * 2.0 - 1.0);
+          vec3 centerPos = viewPosFromDepth(vUv, centerDepth);
+
+          float angle = ign(gl_FragCoord.xy) * 6.28318530718;
+          float ca = cos(angle), sa = sin(angle);
+          mat2 rot = mat2(ca, -sa, sa, ca);
+
+          const int SAMPLES = 10;
+          vec2 ring[10];
+          ring[0] = vec2(1.0, 0.0);
+          ring[1] = vec2(0.809, 0.588);
+          ring[2] = vec2(0.309, 0.951);
+          ring[3] = vec2(-0.309, 0.951);
+          ring[4] = vec2(-0.809, 0.588);
+          ring[5] = vec2(-1.0, 0.0);
+          ring[6] = vec2(-0.809, -0.588);
+          ring[7] = vec2(-0.309, -0.951);
+          ring[8] = vec2(0.309, -0.951);
+          ring[9] = vec2(0.809, -0.588);
+
+          float aoSum = 0.0;
+          float aoWeight = 0.0;
+
+          vec2 texel = 1.0 / resolution;
+
+          for (int i = 0; i < SAMPLES; i++) {
+            vec2 dir = rot * ring[i];
+
+            // контактное затемнение в стыках и впадинах
+            vec2 aoUv = vUv + dir * aoRadius * texel;
+            float aoDepth = texture2D(tDepth, aoUv).r;
+            if (aoDepth < 0.9999) {
+              vec3 aoPos = viewPosFromDepth(aoUv, aoDepth);
+              vec3 diff = aoPos - centerPos;
+              float dist = length(diff);
+              float occ = max(dot(normalize(diff), centerNormal) - 0.02, 0.0);
+              float falloff = clamp(1.0 - dist / (aoRadius * 0.006 + 0.001), 0.0, 1.0);
+              aoSum += occ * falloff;
+              aoWeight += 1.0;
+            }
+          }
+
+          float ao = aoWeight > 0.0 ? (aoSum / aoWeight) : 0.0;
+          float aoFactor = 1.0 - clamp(ao * aoStrength, 0.0, 1.0);
+
+          gl_FragColor = vec4(baseColor * aoFactor, src.a);
+        }
+      `,
+    });
+    this.fsQuad = new FullScreenQuad(this.material);
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    this.uniforms.tDiffuse.value = readBuffer.texture;
+    this.uniforms.tNormal.value = normalTarget.texture;
+    this.uniforms.tDepth.value = depthTexture;
+    this.uniforms.projectionMatrixInverse.value.copy(this.camera.projectionMatrixInverse);
+
+    if (this.renderToScreen) {
+      renderer.setRenderTarget(null);
+    } else {
+      renderer.setRenderTarget(writeBuffer);
+      if (this.clear) renderer.clear();
+    }
+    this.fsQuad.render(renderer);
+  }
+
+  dispose() {
+    this.material.dispose();
+    this.fsQuad.dispose();
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Объёмный свет (God rays)
+   -------------------------------------------------------------------------
+   Дешёвый способ — радиальный блюр от солнца по экрану, но он работает,
+   только пока солнце в кадре, и «лучи» у него живут поверх картинки, а не
+   в сцене. Здесь честный вариант, как Volumetric Fog в Unreal: идём лучом
+   взгляда от камеры до поверхности и на каждом шаге спрашиваем shadow map
+   солнца — освещена эта точка воздуха или она в тени здания. Сумма даёт
+   рассеяние вперёд, то есть видимый луч света.
+
+   Заодно на каждом шаге учитывается тень от облаков, поэтому в разрыв между
+   облаками падает столб света — ровно то, ради чего этот эффект и нужен.
+   Плотность среды падает с высотой: у земли дымка гуще, вверху воздух чище.
+   ------------------------------------------------------------------------- */
+class VolumetricLightPass extends Pass {
+  constructor(camera) {
+    super();
+    this.camera = camera;
+    this.uniforms = {
+      tDiffuse: { value: null },
+      tDepth: { value: null },
+      projectionMatrixInverse: { value: new THREE.Matrix4() },
+      cameraMatrixWorld: { value: new THREE.Matrix4() },
+      uCameraPos: { value: new THREE.Vector3() },
+      uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+      uSunColor: { value: new THREE.Color(1, 0.96, 0.9) },
+      uIntensity: { value: params.volumetric.intensity },
+      uShadowMap: { value: null },
+      uShadowMatrix: { value: new THREE.Matrix4() },
+      uHasShadow: { value: 0 },
+      uDensity: { value: 1 },
+      uHeightFalloff: { value: 1 },
+      uBaseHeight: { value: 0 },
+      uMaxDistance: { value: 100 },
+      uSteps: { value: params.volumetric.steps },
+      uG: { value: params.volumetric.anisotropy },
+    };
+
+    this.material = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+        }
+      `,
+      fragmentShader: /* glsl */`
+        #include <packing>
+
+        varying vec2 vUv;
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tDepth;
+        uniform mat4 projectionMatrixInverse;
+        uniform mat4 cameraMatrixWorld;
+        uniform vec3 uCameraPos;
+        uniform vec3 uSunDirection;
+        uniform vec3 uSunColor;
+        uniform float uIntensity;
+        uniform sampler2D uShadowMap;
+        uniform mat4 uShadowMatrix;
+        uniform int uHasShadow;
+        uniform float uDensity;
+        uniform float uHeightFalloff;
+        uniform float uBaseHeight;
+        uniform float uMaxDistance;
+        uniform int uSteps;
+        uniform float uG;
+
+        const int MAX_VOL_STEPS = 96;
+
+        float ign( vec2 p ) {
+          return fract( 52.9829189 * fract( dot( p, vec2( 0.06711056, 0.00583715 ) ) ) );
+        }
+
+        // Хеньи-Гринштейн, нормированный так, что при g = 0 (изотропная среда)
+        // фаза равна единице — тогда ползунок интенсивности ведёт себя понятно.
+        float henyeyGreenstein( float cosTheta, float g ) {
+          float g2 = g * g;
+          return ( 1.0 - g2 ) / ( 12.5663706 * pow( 1.0 + g2 - 2.0 * g * cosTheta, 1.5 ) ) * 12.5663706;
+        }
+
+        vec3 worldFromDepth( vec2 uv, float depth ) {
+          vec4 ndc = vec4( uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0 );
+          vec4 viewPos = projectionMatrixInverse * ndc;
+          viewPos /= viewPos.w;
+          return ( cameraMatrixWorld * viewPos ).xyz;
+        }
+
+        void main() {
+          vec4 src = texture2D( tDiffuse, vUv );   // в альфе — непрозрачность облаков
+          vec3 base = src.rgb;
+          float depth = texture2D( tDepth, vUv ).r;
+
+          vec3 target = worldFromDepth( vUv, min( depth, 0.9999 ) );
+          vec3 rd = normalize( target - uCameraPos );
+
+          // для пикселей неба идём на всю разрешённую дальность
+          float dist = ( depth >= 0.9999 )
+            ? uMaxDistance
+            : min( distance( target, uCameraPos ), uMaxDistance );
+          if ( dist <= 0.0 ) { gl_FragColor = vec4( base, src.a ); return; }
+
+          float dt = dist / float( uSteps );
+          float jitter = ign( gl_FragCoord.xy );
+          float phase = henyeyGreenstein( dot( rd, uSunDirection ), uG );
+
+          float acc = 0.0;
+          for ( int i = 0; i < MAX_VOL_STEPS; i ++ ) {
+            if ( i >= uSteps ) break;
+            vec3 p = uCameraPos + rd * ( ( float( i ) + jitter ) * dt );
+
+            // экспоненциальное убывание плотности с высотой
+            float h = exp( - max( p.y - uBaseHeight, 0.0 ) / max( uHeightFalloff, 1e-3 ) );
+            if ( h < 0.002 ) continue;
+
+            float visible = 1.0;
+            if ( uHasShadow == 1 ) {
+              vec4 sc = uShadowMatrix * vec4( p, 1.0 );
+              vec3 sco = sc.xyz / sc.w;
+              if ( sco.x > 0.0 && sco.x < 1.0 && sco.y > 0.0 && sco.y < 1.0 && sco.z < 1.0 ) {
+                float blocker = unpackRGBAToDepth( texture2D( uShadowMap, sco.xy ) );
+                visible = step( sco.z - 0.0008, blocker );
+              }
+            }
+
+            acc += visible * h * dt;
+          }
+
+          // 0.015 — внутренний масштаб, чтобы «Интенсивность = 1» в GUI
+          // означала умеренную дымку, а не засветку всего кадра
+          vec3 scatter = uSunColor * ( acc * uDensity * phase * uIntensity * 0.015 );
+          gl_FragColor = vec4( base + scatter, src.a );
+        }
+      `,
+    });
+    this.fsQuad = new FullScreenQuad(this.material);
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    const u = this.uniforms;
+    u.tDiffuse.value = readBuffer.texture;
+    u.tDepth.value = depthTexture;
+    u.projectionMatrixInverse.value.copy(this.camera.projectionMatrixInverse);
+    u.cameraMatrixWorld.value.copy(this.camera.matrixWorld);
+    u.uCameraPos.value.setFromMatrixPosition(this.camera.matrixWorld);
+    u.uSunDirection.value.copy(sunPosition).normalize();
+
+    const shadowMap = sunLight.shadow.map;
+    u.uHasShadow.value = shadowMap ? 1 : 0;
+    if (shadowMap) {
+      u.uShadowMap.value = shadowMap.texture;
+      u.uShadowMatrix.value.copy(sunLight.shadow.matrix);
+    }
+
+    // всё, что задано «в радиусах сцены», переводим в мировые единицы
+    u.uDensity.value = params.volumetric.density / Math.max(sceneRadius, 1e-3);
+    u.uHeightFalloff.value = params.volumetric.heightFalloff * sceneRadius;
+    u.uBaseHeight.value = sceneGroundY;
+    u.uMaxDistance.value = params.volumetric.maxDistance * sceneRadius;
+    u.uSteps.value = params.volumetric.steps;
+    u.uG.value = params.volumetric.anisotropy;
+    u.uIntensity.value = params.volumetric.intensity;
+
+    if (this.renderToScreen) {
+      renderer.setRenderTarget(null);
+    } else {
+      renderer.setRenderTarget(writeBuffer);
+      if (this.clear) renderer.clear();
+    }
+    this.fsQuad.render(renderer);
+  }
+
+  dispose() {
+    this.material.dispose();
+    this.fsQuad.dispose();
+  }
+}
+
+// ---------- Composer ----------
+const composer = new EffectComposer(renderer);
+// EffectComposer по умолчанию рендерит в обычный (не multisample) таргет, и
+// сглаживание из конструктора WebGLRenderer в постобработке не работает —
+// картинка идёт «лесенкой». В WebGL2 достаточно попросить multisample-таргет.
+composer.renderTarget1.samples = 4;
+composer.renderTarget2.samples = 4;
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+
+const aoPass = new AOPass(camera);
+composer.addPass(aoPass);
+
+// после AO: он умножает цвет поверхности, а объёмный свет —
+// это рассеяние в воздухе ПЕРЕД поверхностью, оно добавляется сверху
+const volumetricPass = new VolumetricLightPass(camera);
+volumetricPass.enabled = params.volumetric.enabled;
+composer.addPass(volumetricPass);
+
+const outputPass = new OutputPass();
+composer.addPass(outputPass);
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const pr = renderer.getPixelRatio();
+  pixelW = Math.floor(w * pr);
+  pixelH = Math.floor(h * pr);
+
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  buildNormalTarget(pixelW, pixelH);
+  aoPass.uniforms.resolution.value.set(pixelW, pixelH);
+}
+window.addEventListener('resize', resize);
+
+function applyQuality(name) {
+  const preset = QUALITY_PRESETS[name];
+  if (!preset) return;
+  activePresetName = name;
+  activePreset = preset;
+
+  // Разрешение рендера. На экранах с ретиной это самый крупный расход:
+  // при devicePixelRatio 2 кадр считается вчетверо большим по площади.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, preset.pixelRatio));
+
+  // Сглаживание в постобработке.
+  composer.renderTarget1.samples = preset.msaa;
+  composer.renderTarget2.samples = preset.msaa;
+  composer.renderTarget1.dispose();
+  composer.renderTarget2.dispose();
+
+  // Карта теней.
+  params.shadowMapSize = preset.shadowMapSize;
+  sunLight.shadow.mapSize.set(preset.shadowMapSize, preset.shadowMapSize);
+  if (sunLight.shadow.map) { sunLight.shadow.map.dispose(); sunLight.shadow.map = null; }
+
+  aoPass.enabled = preset.ao;
+  volumetricPass.enabled = preset.volumetric && params.volumetric.enabled;
+
+  pcssApplied = null;      // число выборок PCSS зашито в шейдер — пересобрать
+  fitShadowFrustum();
+  resize();
+  refreshGUI();
+}
+
+// Стартуем со среднего уровня: с него авто-подбор уйдёт вниз за пару секунд,
+// если машина не тянет, а на мощной разница со «Высоким» невелика.
+applyQuality('medium');
+resize();
+updateSun();
+
+// ---------- Auto-frame camera to model ----------
+function frameObject(object3d) {
+  const box = new THREE.Box3().setFromObject(object3d);
+  if (box.isEmpty()) return;
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const fitDist = maxDim / (2 * Math.tan((camera.fov * Math.PI) / 360)) * 1.6;
+
+  controls.target.copy(center);
+  const dir = new THREE.Vector3(0.6, 0.45, 1).normalize();
+  camera.position.copy(center.clone().add(dir.multiplyScalar(fitDist)));
+
+  // Радиус описанной сферы: именно он гарантирует, что сцена целиком влезет
+  // в кубический фрустум тени при любом направлении солнца.
+  sceneRadius = Math.max(size.length() / 2, 0.3);
+  sceneTarget.copy(center);
+
+  applySceneScale(box);
+  updateSun();
+  controls.update();
+  updateCameraClip();
+}
+
+/* Ближняя и дальняя плоскости отсечения — от текущего расстояния до точки
+   вращения, а не фиксированные. Раньше near считался один раз при кадрировании
+   (для площадки в сотни метров это ~2.4 единицы), и при попытке подъехать
+   вплотную геометрия просто срезалась. Теперь near едет вместе с камерой.
+
+   Границы важны: слишком маленький near при большом far убивает точность
+   буфера глубины, а по нему работают AO, объёмный свет и лучи. */
+function updateCameraClip() {
+  const r = sceneRadius;
+  const dist = camera.position.distanceTo(controls.target);
+  const far = dist + r * 60;
+  // Нижний предел near привязан к far: без него на предельном приближении
+  // отношение far/near доходило до шести миллионов, и дальние здания
+  // начинали спорить по глубине. Предел всё равно на порядки меньше
+  // расстояния до цели, так что подъезжать вплотную он не мешает.
+  const nearFloor = Math.max(r * 1e-5, far * 5e-7);
+  const near = THREE.MathUtils.clamp(dist * 0.01, nearFloor, r * 0.05);
+  if (camera.near !== near || camera.far !== far) {
+    camera.near = near;
+    camera.far = far;
+    camera.updateProjectionMatrix();   // заодно обновит projectionMatrixInverse
+  }
+}
+
+/* Все «магические» дистанции сцены зависят от её размера. Изначально они были
+   зашиты под демо-сцену размером ~3 единицы, и на модели в сотни единиц
+   (FBX почти всегда в сантиметрах) туман накрывал всё белым уже в двух шагах
+   от камеры, а орбита упиралась в maxDistance. */
+function applySceneScale(box) {
+  const r = sceneRadius;
+
+  // Нижнего упора практически нет: приближать можно сколько угодно, ближнюю
+  // плоскость отсечения под это подстраивает updateCameraClip().
+  controls.minDistance = Math.max(r * 0.0002, 1e-4);
+  controls.maxDistance = r * 40;
+
+  if (params.fog) {
+    scene.fog = new THREE.Fog(0xd8e6ff, r * 2.5, r * 16);
+  } else {
+    scene.fog = null;
+  }
+
+  // Пол вьюера: размер и клетка — под масштаб модели, посадка чуть ниже
+  // нижней границы модели, чтобы не спорить по глубине с её собственным полом.
+  const cell = Math.max(r / 12, 0.05);
+  if (groundMat.map) groundMat.map.repeat.set((r * 80) / cell, (r * 80) / cell);
+  ground.geometry.dispose();
+  ground.geometry = new THREE.PlaneGeometry(r * 80, r * 80);
+  ground.position.y = box ? box.min.y - r * 0.002 : 0;
+  sceneGroundY = box ? box.min.y : 0;
+
+}
+document.getElementById('btnFrame').onclick = () => {
+  const target = currentModel || demoGroup;
+  frameObject(target);
+};
+
+// ---------- Material conversion (FBX -> PBR-ближе к Unreal) ----------
+function convertMaterial(mat) {
+  if (mat.isMeshStandardMaterial) return mat;
+  const std = new THREE.MeshStandardMaterial({
+    color: mat.color ? mat.color.clone() : new THREE.Color(0xffffff),
+    map: mat.map || null,
+    normalMap: mat.normalMap || null,
+    emissive: mat.emissive ? mat.emissive.clone() : new THREE.Color(0x000000),
+    emissiveMap: mat.emissiveMap || null,
+    alphaMap: mat.alphaMap || null,
+    transparent: mat.transparent,
+    opacity: mat.opacity,
+    side: mat.side,
+    name: mat.name,
+  });
+
+  // ВАЖНО: сила свечения переносится отдельно.
+  // В FBX цвет и сила свечения — два разных свойства (EmissiveColor и
+  // EmissiveFactor). Экспортёры сплошь и рядом пишут EmissiveColor = white
+  // при EmissiveFactor = 0, то есть "свечения нет". FBXLoader кладёт их в
+  // emissive и emissiveIntensity соответственно. Если перенести только цвет,
+  // emissiveIntensity у нового материала останется дефолтной единицей — и
+  // поверхность начнёт светиться чистым белым: она выглядит пересвеченной и
+  // на неё принципиально не может лечь тень (свечение добавляется после
+  // расчёта освещения). Именно так "терялись" тени на земле.
+  std.emissiveIntensity = (typeof mat.emissiveIntensity === 'number') ? mat.emissiveIntensity : 1;
+  if (std.emissiveIntensity === 0) std.emissive.setHex(0x000000);
+  // Грубая аппроксимация roughness из Phong shininess (если он был).
+  // Нижняя граница специально поднята: shininess у FBX-экспортёров обычно
+  // стоит дефолтный (25 у 3ds Max), и буквальный пересчёт даёт ~0.27 —
+  // бетон и асфальт превращаются в полированный камень, который зеркалит небо.
+  if (typeof mat.shininess === 'number') {
+    std.roughness = THREE.MathUtils.clamp(Math.sqrt(2 / (mat.shininess + 2)), 0.35, 1.0);
+  } else {
+    std.roughness = params.material.roughness;
+  }
+  // Стекло: у него shininess заметно выше дефолтного, глянец оставляем.
+  if (mat.transparent && mat.opacity < 0.9 && typeof mat.shininess === 'number' && mat.shininess > 50) {
+    std.roughness = THREE.MathUtils.clamp(Math.sqrt(2 / (mat.shininess + 2)), 0.05, 1.0);
+  }
+  std.metalness = params.material.metalness;
+  std.envMapIntensity = 1.0;
+
+  if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
+  if (std.emissiveMap) std.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+
+  // FBXLoader подключает opacity-маску (TransparencyFactor) как alphaMap и
+  // включает alpha-blending (transparent=true, alphaTest=0). Для масок
+  // "вырезания" (решётки ограждений, перфорация и т.п.) блендинг без
+  // alphaTest даёт неверную сортировку и сплошные светлые пятна вместо
+  // чистой прозрачности — правильный режим тут alpha-test cutout.
+  if (std.alphaMap && std.transparent) {
+    std.transparent = false;
+    std.alphaTest = 0.5;
+    std.side = THREE.DoubleSide; // вырезанные тонкие поверхности обычно нужно видеть с обеих сторон
+    std.alphaMap.colorSpace = THREE.NoColorSpace;
+  }
+
+  return std;
+}
+
+// ---------- Извлечение встроенных PBR-текстур из бинарного FBX ----------
+// THREE.FBXLoader понимает только классические свойства материала (Phong):
+// DiffuseColor, Bump/NormalMap, Specular, Maya|TEX_ao_map — и всё. Свойств
+// metalness/roughness в классической FBX-модели материалов нет физически,
+// поэтому если PBR-текстуры (metalness/roughness/occlusion) экспортированы
+// как отдельные картинки (частый вариант — суффиксы _d/_m/_r/_o в имени),
+// FBXLoader их просто не подключает к материалу, даже если они лежат
+// встроенными (embedded) внутри файла.
+//
+// Ниже — маленький самостоятельный парсер бинарного FBX (версии 7.x),
+// который проходит по дереву узлов, находит Objects>Video (встроенные
+// картинки), Objects>Texture, Objects>Material и связи между ними в
+// Connections, и достаёт байты картинок напрямую из файла в обход
+// FBXLoader. Тяжёлые секции (Geometry/Model/Deformer и т.п.) не парсятся,
+// а перепрыгиваются через EndOffset — быстро даже на больших файлах.
+
+function decodeFbxString(bytes) {
+  try { return new TextDecoder('utf-8').decode(bytes); }
+  catch (e) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  }
+}
+
+function fbxParsePropertyAt(view, buffer, offset) {
+  const type = String.fromCharCode(view.getUint8(offset));
+  offset += 1;
+  switch (type) {
+    case 'Y': { const v = view.getInt16(offset, true); return { type, value: v, offset: offset + 2 }; }
+    case 'C': { const v = view.getUint8(offset); return { type, value: !!v, offset: offset + 1 }; }
+    case 'I': { const v = view.getInt32(offset, true); return { type, value: v, offset: offset + 4 }; }
+    case 'F': { const v = view.getFloat32(offset, true); return { type, value: v, offset: offset + 4 }; }
+    case 'D': { const v = view.getFloat64(offset, true); return { type, value: v, offset: offset + 8 }; }
+    case 'L': { const v = view.getBigInt64(offset, true); return { type, value: v, offset: offset + 8 }; }
+    case 'S': {
+      const len = view.getUint32(offset, true); offset += 4;
+      const bytes = new Uint8Array(buffer, offset, len);
+      return { type, value: decodeFbxString(bytes), offset: offset + len };
+    }
+    case 'R': {
+      const len = view.getUint32(offset, true); offset += 4;
+      const bytes = new Uint8Array(buffer, offset, len); // zero-copy view
+      return { type, value: bytes, offset: offset + len };
+    }
+    case 'f': case 'd': case 'l': case 'i': case 'b': {
+      const arrayLength = view.getUint32(offset, true); offset += 4;
+      const encoding = view.getUint32(offset, true); offset += 4;
+      const compressedLength = view.getUint32(offset, true); offset += 4;
+      const elemSize = { f: 4, d: 8, l: 8, i: 4, b: 1 }[type];
+      const dataLen = encoding !== 0 ? compressedLength : arrayLength * elemSize;
+      return { type, value: null, offset: offset + dataLen }; // содержимое массива нам не нужно
+    }
+    default:
+      throw new Error('Неизвестный тип свойства FBX: ' + type);
+  }
+}
+
+function fbxReadNodeHeader(view, offset) {
+  const endOffset = view.getUint32(offset, true);
+  const numProperties = view.getUint32(offset + 4, true);
+  const propertyListLen = view.getUint32(offset + 8, true);
+  const nameLen = view.getUint8(offset + 12);
+  return { endOffset, numProperties, propertyListLen, nameLen, headerEnd: offset + 13 + nameLen };
+}
+function fbxIsNullRecord(h) {
+  return h.endOffset === 0 && h.numProperties === 0 && h.propertyListLen === 0 && h.nameLen === 0;
+}
+function fbxReadNodeName(buffer, header, selfOffset) {
+  return decodeFbxString(new Uint8Array(buffer, selfOffset + 13, header.nameLen));
+}
+function fbxReadProperties(view, buffer, header) {
+  let o = header.headerEnd;
+  const props = [];
+  for (let i = 0; i < header.numProperties; i++) {
+    const p = fbxParsePropertyAt(view, buffer, o);
+    props.push({ type: p.type, value: p.value });
+    o = p.offset;
+  }
+  return { props, propsEnd: o };
+}
+function fbxForEachChild(view, buffer, header, propsEnd, cb) {
+  let offset = propsEnd;
+  while (offset < header.endOffset) {
+    const ch = fbxReadNodeHeader(view, offset);
+    if (fbxIsNullRecord(ch)) break;
+    const name = fbxReadNodeName(buffer, ch, offset);
+    cb(ch, name, offset);
+    offset = ch.endOffset;
+  }
+}
+
+function extractEmbeddedFbxData(arrayBuffer) {
+  const magic = decodeFbxString(new Uint8Array(arrayBuffer, 0, Math.min(20, arrayBuffer.byteLength)));
+  if (!magic.startsWith('Kaydara FBX Binary')) return null; // ASCII FBX тут не разбираем
+
+  const view = new DataView(arrayBuffer);
+  const fileLen = arrayBuffer.byteLength;
+
+  const videos = new Map();    // idStr -> { relFilename, filename, content: Uint8Array|null }
+  const textures = new Map();  // idStr -> true
+  const materials = new Map(); // idStr -> { name }
+  const connections = [];      // { type, child, parent }
+
+  let offset = 27; // 21 (сигнатура) + 2 (неизв.) + 4 (версия)
+  while (offset < fileLen - 13) {
+    const header = fbxReadNodeHeader(view, offset);
+    if (fbxIsNullRecord(header)) break;
+    const name = fbxReadNodeName(arrayBuffer, header, offset);
+
+    if (name === 'Objects') {
+      const { propsEnd } = fbxReadProperties(view, arrayBuffer, header);
+      fbxForEachChild(view, arrayBuffer, header, propsEnd, (ch, cname, chOffset) => {
+        if (cname === 'Video' || cname === 'Texture' || cname === 'Material') {
+          const { props: cprops, propsEnd: cPropsEnd } = fbxReadProperties(view, arrayBuffer, ch);
+          const idStr = cprops[0] && cprops[0].type === 'L' ? cprops[0].value.toString() : null;
+          const rawName = cprops[1] && typeof cprops[1].value === 'string' ? cprops[1].value : '';
+          const cleanName = rawName.split(String.fromCharCode(0,1))[0];
+          if (!idStr) return;
+
+          if (cname === 'Material') {
+            materials.set(idStr, { name: cleanName });
+          } else if (cname === 'Texture') {
+            textures.set(idStr, true);
+          } else if (cname === 'Video') {
+            const entry = { relFilename: null, filename: null, content: null };
+            fbxForEachChild(view, arrayBuffer, ch, cPropsEnd, (gh, gname) => {
+              if (gname === 'RelativeFilename' || gname === 'Filename' || gname === 'Content') {
+                const { props: gprops } = fbxReadProperties(view, arrayBuffer, gh);
+                const val = gprops[0] ? gprops[0].value : null;
+                if (gname === 'RelativeFilename') entry.relFilename = val;
+                else if (gname === 'Filename') entry.filename = val;
+                else if (gname === 'Content') entry.content = val;
+              }
+            });
+            videos.set(idStr, entry);
+          }
+        }
+      });
+    } else if (name === 'Connections') {
+      const { propsEnd } = fbxReadProperties(view, arrayBuffer, header);
+      fbxForEachChild(view, arrayBuffer, header, propsEnd, (ch, cname) => {
+        if (cname === 'C') {
+          const { props: cprops } = fbxReadProperties(view, arrayBuffer, ch);
+          connections.push({
+            type: cprops[0] ? cprops[0].value : null,
+            child: cprops[1] ? cprops[1].value.toString() : null,
+            parent: cprops[2] ? cprops[2].value.toString() : null,
+          });
+        }
+      });
+    }
+    offset = header.endOffset;
+  }
+
+  return { videos, textures, materials, connections };
+}
+
+// "_o" в этом семействе экспортёров — это Opacity (маска прозрачности), а не
+// Ambient Occlusion: подтверждено и статистикой пикселей (почти бинарная
+// маска 0/255), и тем, что FBXLoader САМ уже подключает её как alphaMap через
+// legacy-свойство TransparencyFactor. Поэтому здесь она не обрабатывается —
+// нет смысла дублировать то, что FBXLoader и так сделал корректно.
+const FBX_TEX_SUFFIX_SLOT = { d: 'map', n: 'normalMap', r: 'roughnessMap', m: 'metalnessMap', e: 'emissiveMap' };
+
+// В части пайплайнов канал "_r" на деле хранит glossiness (гладкость), а не
+// PBR-roughness — white = глянец, а не шероховатость. Если после загрузки
+// стекло/металл выглядят матовыми "как асфальт", хотя логически должны
+// бликовать — это тот самый случай, и карту нужно инвертировать.
+function invertTextureRGB(tex) {
+  const img = tex.image;
+  if (!img || !img.width) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = 255 - d[i];
+    d[i + 1] = 255 - d[i + 1];
+    d[i + 2] = 255 - d[i + 2];
+  }
+  ctx.putImageData(id, 0, 0);
+  tex.image = canvas;
+  tex.needsUpdate = true;
+}
+
+function parseFbxTexSuffix(filename) {
+  if (!filename) return null;
+  const base = filename.split(/[\\/]/).pop();
+  const m = base.match(/^(.*)_([dnrmoeDNRMOE])_(\d+)\.([A-Za-z0-9]+)$/);
+  if (!m) return null;
+  const suffix = m[2].toLowerCase();
+  if (!FBX_TEX_SUFFIX_SLOT[suffix]) return null;
+  return { full: base, suffix, ext: m[4].toLowerCase() };
+}
+
+// materialName -> { d:{content,ext,filename}, m:{...}, r:{...}, o:{...}, n:{...}, e:{...} }
+function buildEmbeddedMaterialTextureMap(extracted) {
+  const { videos, textures, materials, connections } = extracted;
+
+  const texToVideo = new Map();
+  for (const c of connections) {
+    if (c.type === 'OO' && videos.has(c.child) && textures.has(c.parent)) {
+      texToVideo.set(c.parent, c.child);
+    }
+  }
+  const matToTextures = new Map();
+  for (const c of connections) {
+    if (textures.has(c.child) && materials.has(c.parent)) {
+      if (!matToTextures.has(c.parent)) matToTextures.set(c.parent, []);
+      matToTextures.get(c.parent).push(c.child);
+    }
+  }
+
+  const result = new Map();
+  for (const [matId, mat] of materials) {
+    const texIds = matToTextures.get(matId) || [];
+    const slots = {};
+    for (const texId of texIds) {
+      const videoId = texToVideo.get(texId);
+      if (!videoId) continue;
+      const video = videos.get(videoId);
+      if (!video || !video.content || video.content.byteLength === 0) continue;
+      const info = parseFbxTexSuffix(video.relFilename || video.filename || '');
+      if (!info) continue;
+      slots[info.suffix] = { content: video.content, ext: info.ext, filename: info.full };
+    }
+    if (Object.keys(slots).length) result.set(mat.name, slots);
+  }
+  return result;
+}
+
+const embeddedTexBlobUrls = [];
+const embeddedTexCache = new Map(); // filename -> THREE.Texture
+
+function applyEmbeddedPBRMaps(std, embeddedPBR) {
+  if (!embeddedPBR) return false;
+  const slots = embeddedPBR.get(std.name);
+  if (!slots) return false;
+
+  const loader = new THREE.TextureLoader();
+  let usedAoMap = false;
+
+  for (const suffix of Object.keys(slots)) {
+    const slot = FBX_TEX_SUFFIX_SLOT[suffix];
+    if (!slot) continue;
+    // не затираем то, что FBXLoader уже корректно подключил (обычно map/normalMap)
+    if (std[slot]) continue;
+
+    const entry = slots[suffix];
+    let tex = embeddedTexCache.get(entry.filename);
+    if (!tex) {
+      const mime = entry.ext === 'jpg' ? 'image/jpeg' : `image/${entry.ext}`;
+      const url = URL.createObjectURL(new Blob([entry.content], { type: mime }));
+      embeddedTexBlobUrls.push(url);
+      const shouldInvert = suffix === 'r' && params.material.invertRoughness;
+      tex = loader.load(url, shouldInvert ? invertTextureRGB : undefined);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = (suffix === 'd' || suffix === 'e') ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      embeddedTexCache.set(entry.filename, tex);
+    }
+
+    std[slot] = tex;
+    if (slot === 'metalnessMap') std.metalness = 1.0;
+    if (slot === 'roughnessMap') std.roughness = 1.0;
+    if (slot === 'aoMap') { std.aoMapIntensity = 1.0; usedAoMap = true; }
+    if (slot === 'emissiveMap' && std.emissive.getHex() === 0) std.emissive.set(0xffffff);
+  }
+  std.needsUpdate = true;
+  return usedAoMap;
+}
+
+/* -------------------------------------------------------------------------
+   HDRI-окружение (.exr / .hdr)
+   ------------------------------------------------------------------------- */
+
+// EXRLoader и RGBELoader отдают данные в half-float (Uint16Array). Чтобы найти
+// по панораме солнце, эти значения нужно разобрать вручную.
+function halfToFloat(h) {
+  const sign = (h & 0x8000) ? -1 : 1;
+  const exponent = (h & 0x7C00) >> 10;
+  const fraction = h & 0x03FF;
+  if (exponent === 0) return sign * Math.pow(2, -14) * (fraction / 1024);
+  if (exponent === 0x1F) return fraction ? NaN : sign * Infinity;
+  return sign * Math.pow(2, exponent - 15) * (1 + fraction / 1024);
+}
+
+/* Ищем в панораме самое яркое место и считаем это солнцем.
+   Без этого направленный свет (а значит и тени) смотрел бы куда угодно, и
+   тени спорили бы с картинкой в отражениях — типичная беда HDRI-сцен. */
+function sunDirectionFromHDRI(texture) {
+  const img = texture.image;
+  if (!img || !img.data) return null;
+  const { data, width, height } = img;
+  const isHalf = (data instanceof Uint16Array);
+  const get = isHalf ? (i) => halfToFloat(data[i]) : (i) => data[i];
+
+  // шаг по пикселям: полноразмерный обход 4k-панорамы не нужен
+  const step = Math.max(1, Math.floor(width / 512));
+  let best = -1, bestX = 0, bestY = 0;
+  for (let y = 0; y < height; y += step) {
+    // у полюсов телесный угол пикселя стремится к нулю — взвешиваем,
+    // иначе яркая точка в зените перевешивает реальное солнце
+    const v = (y + 0.5) / height;
+    const weight = Math.cos((v - 0.5) * Math.PI);
+    for (let x = 0; x < width; x += step) {
+      const i = (y * width + x) * 4;
+      const lum = (get(i) * 0.2126 + get(i + 1) * 0.7152 + get(i + 2) * 0.0722) * weight;
+      if (lum > best) { best = lum; bestX = x; bestY = y; }
+    }
+  }
+  if (best <= 0) return null;
+
+  const u = (bestX + 0.5) / width;
+  const v = (bestY + 0.5) / height;
+  const toDir = (vv) => {
+    const phi = (u - 0.5) * Math.PI * 2;
+    const theta = (vv - 0.5) * Math.PI;
+    return new THREE.Vector3(
+      Math.cos(phi) * Math.cos(theta),
+      Math.sin(theta),
+      Math.sin(phi) * Math.cos(theta)
+    );
+  };
+  // Разные загрузчики кладут строки панорамы в разном порядке. Солнце почти
+  // всегда над горизонтом, поэтому если получилось «под землёй» — переворачиваем.
+  let dir = toDir(v);
+  if (dir.y < 0) dir = toDir(1 - v);
+  return dir;
+}
+
+function applySunFromHDRI() {
+  if (!hdriTexture) return false;
+  const dir = sunDirectionFromHDRI(hdriTexture);
+  if (!dir || dir.y <= 0.02) return false;
+  params.elevation = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1)));
+  // обратное к setFromSphericalCoords: x = sinφ·sinθ, z = sinφ·cosθ
+  params.azimuth = THREE.MathUtils.radToDeg(Math.atan2(dir.x, dir.z));
+  updateSun();
+  refreshGUI();
+  return true;
+}
+
+function loadHDRIFromFile(file) {
+  const ext = file.name.toLowerCase().split('.').pop();
+  if (ext !== 'exr' && ext !== 'hdr') {
+    alert('Поддерживаются панорамы .exr и .hdr');
+    return;
+  }
+  setLoadingBar(15);
+  const url = URL.createObjectURL(file);
+  const loader = ext === 'exr' ? new EXRLoader() : new RGBELoader();
+  loader.load(url, (texture) => {
+    URL.revokeObjectURL(url);
+
+    // Под расширением .exr/.hdr может лежать что угодно: одноканальная маска
+    // из Photoshop, рендер-пасс, обычное фото. Проверяем, что это вообще
+    // пригодная картинка, и предупреждаем, если она не равнопромежуточная.
+    const img = texture.image;
+    if (!img || !img.width || !img.height || !img.data) {
+      texture.dispose();
+      setLoadingBar(0);
+      alert('Файл ' + file.name + ' не содержит пригодной RGB-картинки ' +
+            '(например, это одноканальный или tiled EXR). Нужна равнопромежуточная ' +
+            'панорама 2:1 в RGB.');
+      return;
+    }
+    const aspect = img.width / img.height;
+    if (Math.abs(aspect - 2) > 0.15) {
+      console.warn(`HDRI ${file.name}: соотношение сторон ${aspect.toFixed(2)}:1, ` +
+                   'а равнопромежуточная панорама должна быть 2:1. ' +
+                   'Окружение будет искажено.');
+    }
+
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+
+    if (hdriTexture) hdriTexture.dispose();
+    if (hdriPMREM) hdriPMREM.dispose();
+    hdriTexture = texture;
+    hdriPMREM = pmremGenerator.fromEquirectangular(texture);
+    hdriName = file.name;
+
+    params.envSource = 'hdri';
+    updateEnvironment();
+    // сразу подгоняем солнце под панораму, чтобы тени совпали с картинкой
+    const sunFound = applySunFromHDRI();
+    refreshGUI();
+    setLoadingBar(100);
+    console.log(`HDRI загружена: ${file.name} (${img.width}×${img.height})` +
+                (sunFound ? `, солнце: высота ${params.elevation.toFixed(1)}°, азимут ${params.azimuth.toFixed(1)}°`
+                          : ', солнце в панораме не найдено — направление света осталось прежним'));
+  }, undefined, (err) => {
+    URL.revokeObjectURL(url);
+    setLoadingBar(0);
+    console.error('Ошибка загрузки HDRI:', err);
+    alert('Не удалось прочитать ' + file.name + '. ' +
+          'EXRLoader понимает scanline-EXR (ZIP/PIZ/RLE/DWA); tiled и multi-part не поддерживаются.');
+  });
+}
+
+// Анизотропная фильтрация для всех карт материала. Без неё текстуры крыш и
+// асфальта, видимые под острым углом, идут муаром — это первое, что выдаёт
+// «вьюер» на фоне рендера из Unreal.
+const MAX_ANISOTROPY = renderer.capabilities.getMaxAnisotropy();
+function applyTextureFiltering(mat) {
+  for (const key in mat) {
+    const t = mat[key];
+    if (t && t.isTexture) {
+      t.anisotropy = MAX_ANISOTROPY;
+      t.generateMipmaps = true;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.needsUpdate = true;
+    }
+  }
+}
+
+// Есть ли внутри модели собственный «пол»: меш, который занимает заметную
+// часть площади модели в плане и лежит в нижней её трети.
+function modelHasOwnGround(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const totalArea = size.x * size.z;
+  if (totalArea <= 0) return false;
+  const lowLimit = box.min.y + size.y * 0.35;
+
+  let found = false;
+  const b = new THREE.Box3();
+  const s = new THREE.Vector3();
+  obj.traverse((c) => {
+    if (found || !c.isMesh) return;
+    b.setFromObject(c);
+    b.getSize(s);
+    const area = s.x * s.z;
+    // плоский (высота мала относительно габарита) и широкий меш у основания
+    const flat = s.y <= Math.max(size.y * 0.5, 0.001);
+    if (flat && area >= totalArea * 0.35 && b.min.y <= lowLimit) found = true;
+  });
+  return found;
+}
+
+// ---------- FBX loading (drag&drop, с поддержкой внешних текстур) ----------
+let currentModel = null;
+let mixer = null;
+let currentActions = [];
+let activeAction = null;
+
+const manager = new THREE.LoadingManager();
+const fileMap = new Map(); // filename(lowercase) -> object URL
+
+manager.setURLModifier((url) => {
+  let clean = url;
+  try { clean = decodeURI(url); } catch (e) {}
+  const name = clean.split(/[\\/]/).pop().toLowerCase();
+  if (fileMap.has(name)) return fileMap.get(name);
+  return url;
+});
+
+const fbxLoader = new FBXLoader(manager);
+
+function clearModel() {
+  if (currentModel) {
+    scene.remove(currentModel);
+    currentModel.traverse((c) => {
+      if (c.geometry) c.geometry.dispose();
+      if (c.material) {
+        const mats = Array.isArray(c.material) ? c.material : [c.material];
+        mats.forEach((m) => {
+          for (const k in m) { if (m[k] && m[k].isTexture) m[k].dispose(); }
+          m.dispose();
+        });
+      }
+    });
+    currentModel = null;
+  }
+  if (mixer) { mixer.stopAllAction(); mixer = null; }
+  currentActions = [];
+  activeAction = null;
+  document.getElementById('animPanel').style.display = 'none';
+
+  // текстуры, извлечённые нами напрямую из embedded-контента FBX (см. выше) —
+  // они не входят в стандартный обход material[key], чистим отдельно
+  embeddedTexCache.forEach((tex) => tex.dispose());
+  embeddedTexCache.clear();
+  embeddedTexBlobUrls.forEach((u) => URL.revokeObjectURL(u));
+  embeddedTexBlobUrls.length = 0;
+}
+
+function setLoadingBar(pct) {
+  const bar = document.getElementById('loadingBar');
+  bar.style.width = pct + '%';
+  if (pct >= 100) setTimeout(() => (bar.style.width = '0%'), 400);
+}
+
+function onModelLoaded(obj, embeddedPBR) {
+  clearModel();
+  demoGroup.visible = false;
+
+  let triCount = 0;
+  let pbrMapsApplied = 0;
+  obj.traverse((c) => {
+    if (c.isMesh) {
+      c.castShadow = true;
+      c.receiveShadow = true;
+      const mats = Array.isArray(c.material) ? c.material : [c.material];
+      const converted = mats.map(convertMaterial);
+      let needsUv2 = false;
+      converted.forEach((std) => {
+        if (applyEmbeddedPBRMaps(std, embeddedPBR)) needsUv2 = true;
+        if (std.metalnessMap || std.roughnessMap || std.aoMap) pbrMapsApplied++;
+        applyTextureFiltering(std);
+      });
+      // aoMap в three.js сэмплится по второму UV-каналу (uv2) — у большинства
+      // FBX его нет, переиспользуем основной uv, иначе карта окклюзии просто
+      // не будет применяться.
+      if (needsUv2 && c.geometry.attributes.uv && !c.geometry.attributes.uv2) {
+        c.geometry.setAttribute('uv2', c.geometry.attributes.uv);
+      }
+      c.material = Array.isArray(c.material) ? converted : converted[0];
+      if (c.geometry.index) triCount += c.geometry.index.count / 3;
+      else if (c.geometry.attributes.position) triCount += c.geometry.attributes.position.count / 3;
+    }
+  });
+  if (pbrMapsApplied > 0) {
+    console.log(`Встроенные PBR-текстуры (metalness/roughness/AO) подключены к ${pbrMapsApplied} материал(ам).`);
+  }
+
+  // центрируем модель по X/Z и ставим на пол (Y=0)
+  const box = new THREE.Box3().setFromObject(obj);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  obj.position.x -= center.x;
+  obj.position.z -= center.z;
+  obj.position.y -= box.min.y;
+
+  scene.add(obj);
+  currentModel = obj;
+
+  // Если у модели есть своя земля — плоскость вьюера становится нейтральным
+  // горизонтом без клетки (см. setGroundStyle), иначе остаётся клетчатой:
+  // по ней удобно читать масштаб и тени отдельно стоящего объекта.
+  setGroundStyle(modelHasOwnGround(obj));
+  params.ground = true;
+  ground.visible = true;
+  refreshGUI();
+  document.getElementById('statTris').textContent = 'Tris: ' + Math.round(triCount).toLocaleString('ru-RU');
+
+  frameObject(obj);
+
+  // Анимации
+  const animPanel = document.getElementById('animPanel');
+  const select = document.getElementById('animSelect');
+  select.innerHTML = '';
+  if (obj.animations && obj.animations.length) {
+    mixer = new THREE.AnimationMixer(obj);
+    currentActions = obj.animations.map((clip) => mixer.clipAction(clip));
+    obj.animations.forEach((clip, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = clip.name || ('Clip ' + i);
+      select.appendChild(opt);
+    });
+    activeAction = currentActions[0];
+    activeAction.play();
+    animPanel.style.display = 'block';
+  } else {
+    animPanel.style.display = 'none';
+  }
+}
+
+function loadFbxFromArrayBuffer(buffer, fileName) {
+  setLoadingBar(20);
+  let embeddedPBR = null;
+  try {
+    const extracted = extractEmbeddedFbxData(buffer);
+    if (extracted) embeddedPBR = buildEmbeddedMaterialTextureMap(extracted);
+  } catch (e) {
+    console.warn('Не удалось извлечь встроенные PBR-текстуры (metalness/roughness/AO) из FBX:', e);
+  }
+  try {
+    const obj = fbxLoader.parse(buffer, '');
+    setLoadingBar(100);
+    onModelLoaded(obj, embeddedPBR);
+  } catch (err) {
+    setLoadingBar(0);
+    console.error('Ошибка загрузки FBX:', err);
+    alert('Не удалось загрузить FBX: ' + err.message);
+  }
+}
+
+// Модели приходят только из галереи (параметром ?model=), поэтому в окно
+// принимаем лишь панорамы окружения.
+async function handleFiles(fileList) {
+  const files = Array.from(fileList);
+  const hdriFile = files.find((f) => /\.(exr|hdr)$/i.test(f.name));
+  if (hdriFile) {
+    loadHDRIFromFile(hdriFile);
+    return;
+  }
+  if (files.some((f) => f.name.toLowerCase().endsWith('.fbx'))) {
+    alert('Модели открываются из галереи. Чтобы добавить свою — положите .fbx ' +
+          'и одноимённый скриншот в папку f и перезапустите build-site.ps1.');
+    return;
+  }
+  alert('Перетащите панораму .exr или .hdr');
+}
+
+// ---------- Автозагрузка по URL: viewer.html?model=f/Butovo.fbx ----------
+// Работает только когда страница открыта по http:// (через serve.ps1 или
+// GitHub Pages) — из file:// браузер запрещает fetch к локальным файлам.
+const statusBox = document.getElementById('status');
+function showStatus(html, isError) {
+  statusBox.innerHTML = html;
+  statusBox.classList.toggle('error', !!isError);
+  statusBox.style.display = 'block';
+}
+function hideStatus() { statusBox.style.display = 'none'; }
+
+async function loadFbxFromUrl(url) {
+  // Демо-сцену убираем сразу. Иначе при неудачной загрузке она остаётся в
+  // кадре, и выглядит это так, будто вьюер открыл не ту модель, а не так,
+  // будто он ничего не смог загрузить.
+  demoGroup.visible = false;
+  showStatus('Загрузка модели…');
+  try {
+    setLoadingBar(10);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+    const total = parseInt(res.headers.get('content-length') || '0', 10);
+    let received = 0;
+    const chunks = [];
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (total) {
+        setLoadingBar(10 + (received / total) * 70);
+        showStatus('Загрузка модели… ' + Math.round((received / total) * 100) + '%');
+      }
+    }
+    const buf = new Uint8Array(received);
+    let pos = 0;
+    for (const c of chunks) { buf.set(c, pos); pos += c.length; }
+    showStatus('Разбор FBX…');
+    loadFbxFromArrayBuffer(buf.buffer, url.split('/').pop());
+    hideStatus();
+  } catch (e) {
+    setLoadingBar(0);
+    console.error('Не удалось загрузить модель по URL:', url, e);
+
+    // Самая частая причина — страницу открыли двойным кликом с диска.
+    // Из file:// браузер запрещает fetch к локальным файлам, и загрузка
+    // падает всегда, независимо от модели.
+    const fromDisk = location.protocol === 'file:';
+    showStatus(
+      '<b>Модель не загрузилась</b><br/>' +
+      '<span class="path">' + url + '</span>' +
+      (fromDisk
+        ? '<br/><br/>Страница открыта с диска (<code>file://</code>), а оттуда ' +
+          'браузер запрещает читать файлы. Нужен любой локальный сервер:' +
+          '<br/><code class="cmd">powershell -ExecutionPolicy Bypass -File serve.ps1</code>' +
+          '<br/>и открыть <code>http://localhost:8080/</code>.' +
+          '<br/><br/>На GitHub Pages всё работает без этого — там уже http.'
+        : '<br/><br/>' + e.message),
+      true
+    );
+    demoGroup.visible = true;   // чтобы окно не было пустым
+  }
+}
+
+const modelParam = new URLSearchParams(location.search).get('model');
+if (modelParam) {
+  // Имя берём из параметра ?name=, иначе выводим имя файла.
+  const label = new URLSearchParams(location.search).get('name')
+             || decodeURIComponent(modelParam.split('/').pop().replace(/\.fbx$/i, ''));
+  document.getElementById('modelName').textContent = label;
+  document.title = label + ' — FBX Viewer';
+  loadFbxFromUrl(modelParam);
+} else {
+  document.getElementById('modelName').textContent = 'демо-сцена';
+}
+
+// drag & drop
+const dropzone = document.getElementById('dropzone');
+let dragDepth = 0;
+window.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragDepth++;
+  dropzone.classList.add('active');
+});
+window.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropzone.classList.remove('active');
+});
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropzone.classList.remove('active');
+  if (e.dataTransfer.files && e.dataTransfer.files.length) {
+    handleFiles(e.dataTransfer.files);
+  }
+});
+
+// file inputs
+document.getElementById('btnHdri').onclick = () => document.getElementById('hdriInput').click();
+document.getElementById('hdriInput').onchange = (e) => { if (e.target.files.length) loadHDRIFromFile(e.target.files[0]); };
+
+// анимация UI
+document.getElementById('animSelect').onchange = (e) => {
+  const idx = parseInt(e.target.value, 10);
+  if (activeAction) activeAction.stop();
+  activeAction = currentActions[idx];
+  activeAction.reset().play();
+};
+document.getElementById('animPlay').onclick = () => {
+  if (!activeAction) return;
+  activeAction.paused = !activeAction.paused;
+};
+document.getElementById('animSpeed').oninput = (e) => {
+  const v = parseFloat(e.target.value);
+  if (mixer) mixer.timeScale = v;
+  document.getElementById('animSpeedLabel').textContent = v.toFixed(2) + '×';
+};
+
+// ---------- GUI ----------
+const gui = new GUI({ title: 'Настройки вьюера' });
+
+// Значения params меняются и из кода (загрузка модели, солнце из HDRI) —
+// панель надо синхронизировать, иначе она показывает старое.
+function refreshGUI() {
+  // может быть вызвана из кода до того, как панель создана
+  try { gui.controllersRecursive().forEach((c) => c.updateDisplay()); } catch (e) {}
+}
+
+const fSun = gui.addFolder('Небо и солнце');
+fSun.add(params, 'elevation', 0, 90, 0.1).name('Высота солнца').onChange(updateSun);
+fSun.add(params, 'azimuth', -180, 180, 0.5).name('Азимут').onChange(updateSun);
+fSun.add(params, 'sunIntensity', 0, 25, 0.05).name('Яркость солнца').onChange((v) => (sunLight.intensity = v));
+fSun.add(params, 'skyIntensity', 0.05, 2, 0.01).name('Яркость неба').onChange((v) => {
+  skyUniforms['skyIntensity'].value = v;
+  updateEnvironment();   // небо кормит IBL — пересобираем окружение
+});
+fSun.add(params, 'envIntensity', 0, 3, 0.01).name('Свет от неба (IBL)').onChange((v) => (scene.environmentIntensity = v));
+fSun.add(params, 'exposure', 0.1, 3, 0.01).name('Экспозиция').onChange((v) => (renderer.toneMappingExposure = v));
+fSun.add(params, 'toneMapping', { 'ACES Filmic': 'aces', 'AgX': 'agx', 'Neutral': 'neutral' })
+  .name('Tone mapping').onChange((v) => {
+    renderer.toneMapping = v === 'agx' ? THREE.AgXToneMapping
+      : v === 'neutral' ? THREE.NeutralToneMapping : THREE.ACESFilmicToneMapping;
+    scene.traverse((o) => { if (o.isMesh) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach((m) => { if (m) m.needsUpdate = true; });
+    }});
+  });
+
+const fVol = gui.addFolder('Объёмный свет (лучи)');
+fVol.add(params.volumetric, 'enabled').name('Включить').onChange((v) => (volumetricPass.enabled = v));
+fVol.add(params.volumetric, 'intensity', 0, 5, 0.01).name('Интенсивность');
+fVol.add(params.volumetric, 'density', 0, 4, 0.01).name('Плотность дымки');
+fVol.add(params.volumetric, 'heightFalloff', 0.05, 4, 0.01).name('Высота дымки');
+fVol.add(params.volumetric, 'anisotropy', 0, 0.95, 0.01).name('Направленность (g)');
+fVol.add(params.volumetric, 'maxDistance', 1, 20, 0.5).name('Дальность');
+fVol.add(params.volumetric, 'steps', { 'Черновое (24)': 24, 'Среднее (40)': 40, 'Высокое (64)': 64, 'Макс. (96)': 96 })
+  .name('Качество');
+
+const fHdri = gui.addFolder('HDRI-окружение');
+fHdri.add({ open: () => document.getElementById('hdriInput').click() }, 'open').name('📂 Загрузить .exr / .hdr');
+fHdri.add(params, 'envSource', { 'Процедурное небо': 'sky', 'HDRI-панорама': 'hdri' })
+  .name('Источник').onChange((v) => {
+    if (v === 'hdri' && !hdriPMREM) {
+      alert('Сначала загрузите панораму .exr или .hdr');
+      params.envSource = 'sky';
+      refreshGUI();
+    }
+    updateEnvironment();
+  });
+fHdri.add(params.hdri, 'showBackground').name('Показывать как фон').onChange(updateEnvironment);
+fHdri.add(params.hdri, 'blur', 0, 1, 0.01).name('Размытие фона').onChange(updateEnvironment);
+fHdri.add(params.hdri, 'bgIntensity', 0, 3, 0.01).name('Яркость фона').onChange(updateEnvironment);
+fHdri.add(params.hdri, 'rotation', -180, 180, 1).name('Поворот, °').onChange(updateEnvironment);
+fHdri.add({ sun: () => {
+  if (!applySunFromHDRI()) alert('Не удалось найти солнце в панораме (или оно ниже горизонта)');
+} }, 'sun').name('☀ Солнце по панораме');
+
+const fShadow = gui.addFolder('Тени');
+fShadow.add(params, 'pcss').name('PCSS (мягкость по расстоянию)').onChange(() => {
+  pcssApplied = null;
+  fitShadowFrustum();
+});
+fShadow.add(params, 'sunAngle', 0.1, 6, 0.05).name('Угловой размер солнца, °').onChange(() => {
+  pcssApplied = null;
+  fitShadowFrustum();
+});
+fShadow.add(params, 'shadowMapSize', { '1024': 1024, '2048': 2048, '4096': 4096 }).name('Разрешение карты').onChange((v) => {
+  sunLight.shadow.mapSize.set(v, v);
+  sunLight.shadow.map?.dispose();
+  sunLight.shadow.map = null;
+  pcssApplied = null;
+  fitShadowFrustum();
+});
+
+const fAO = gui.addFolder('Ambient Occlusion');
+fAO.add(params.ao, 'radius', 2, 80, 1).name('Радиус (px)').onChange((v) => (aoPass.uniforms.aoRadius.value = v));
+fAO.add(params.ao, 'strength', 0, 2, 0.01).name('Сила').onChange((v) => (aoPass.uniforms.aoStrength.value = v));
+
+const fMat = gui.addFolder('Материал (override)');
+fMat.add(params.material, 'invertRoughness').name('Инверт. roughness (glossiness→roughness)');
+fMat.add(params.material, 'overrideEnabled').name('Включить override').onChange(applyMaterialOverride);
+fMat.add(params.material, 'roughness', 0, 1, 0.01).name('Roughness').onChange(applyMaterialOverride);
+fMat.add(params.material, 'metalness', 0, 1, 0.01).name('Metalness').onChange(applyMaterialOverride);
+
+function applyMaterialOverride() {
+  if (!params.material.overrideEnabled || !currentModel) return;
+  currentModel.traverse((c) => {
+    if (c.isMesh) {
+      const mats = Array.isArray(c.material) ? c.material : [c.material];
+      mats.forEach((m) => {
+        if (m.isMeshStandardMaterial) {
+          m.roughness = params.material.roughness;
+          m.metalness = params.material.metalness;
+        }
+      });
+    }
+  });
+}
+
+const fQuality = gui.addFolder('Качество и производительность');
+fQuality.add(params, 'quality', {
+  'Авто (понижать при тормозах)': 'auto',
+  'Низкое': 'low', 'Среднее': 'medium', 'Высокое': 'high',
+}).name('Уровень').onChange((v) => {
+  if (v === 'auto') { autoTuneBudget = 2; slowTime = 0; return; }
+  autoTuneBudget = 0;              // ручной выбор — авто больше не вмешивается
+  applyQuality(v);
+});
+fQuality.add({ info: () => alert(
+  'Уровень меняет сразу несколько вещей:\n\n' +
+  '• разрешение рендера (на ретине это главный расход)\n' +
+  '• сглаживание в постобработке\n' +
+  '• размер карты теней и число выборок PCSS\n' +
+  '• ambient occlusion\n\n' +
+  'Если тормозит даже на «Низком» — модель слишком тяжёлая для этой видеокарты.'
+) }, 'info').name('Что это меняет?');
+
+const fScene = gui.addFolder('Сцена');
+fScene.add(params, 'ground').name('Показывать пол').onChange((v) => (ground.visible = v));
+fScene.add(params, 'fog').name('Туман (перспектива)').onChange(() => applySceneScale(currentModel ? new THREE.Box3().setFromObject(currentModel) : null));
+fScene.add(params, 'autoRotate').name('Авто-вращение').onChange((v) => (controls.autoRotate = v));
+fScene.add({ reset: () => frameObject(currentModel || demoGroup) }, 'reset').name('Сбросить камеру');
+
+// Панель по умолчанию свёрнута: разделов уже десяток, и развёрнутыми они
+// занимают весь экран. Сворачиваем и сами разделы — тогда при раскрытии
+// панели видно аккуратный список заголовков, а не простыню ползунков.
+gui.foldersRecursive().forEach((folder) => folder.close());
+gui.close();
+
+// ---------- Render loop ----------
+const clock = new THREE.Clock();
+let fpsAcc = 0, fpsCount = 0, fpsTimer = 0;
+
+// Один полный кадр: сначала вспомогательный буфер нормалей+глубины
+// (нужен проходу AO и объёмному свету), затем картинка через composer.
+function renderFrame() {
+  // здесь, а не в цикле анимации: тогда правильное отсечение получают и
+  // обычные кадры, и снимки в произвольном разрешении
+  updateCameraClip();
+
+  // Проход нормалей+глубины рисует всю сцену второй раз. Нужен он только
+  // проходам AO и объёмного света — если оба выключены, пропускаем.
+  if (aoPass.enabled || volumetricPass.enabled) {
+    const prevOverride = scene.overrideMaterial;
+    scene.overrideMaterial = normalMaterial;
+    const prevTarget = renderer.getRenderTarget();
+    renderer.setRenderTarget(normalTarget);
+    renderer.clear();
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(prevTarget);
+    scene.overrideMaterial = prevOverride;
+  }
+
+  composer.render();
+}
+
+// Рендер кадра в произвольном разрешении (скриншот). Пиксель-ратио на время
+// снимка = 1, чтобы размер картинки был ровно тем, что запросили.
+function snapshot(w = 1920, h = 1080) {
+  const prevPr = renderer.getPixelRatio();
+  const prevAspect = camera.aspect;
+  renderer.setPixelRatio(1);
+  renderer.setSize(w, h, false);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  buildNormalTarget(w, h);
+  aoPass.uniforms.resolution.value.set(w, h);
+
+  renderFrame();
+  // toDataURL строго в том же кадре — иначе drawing buffer уже очищен
+  const url = renderer.domElement.toDataURL('image/png');
+
+  renderer.setPixelRatio(prevPr);
+  camera.aspect = prevAspect;
+  resize();
+  return url;
+}
+
+function downloadSnapshot() {
+  const url = snapshot(1920, 1080);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'fbx-viewer-' + Date.now() + '.png';
+  a.click();
+}
+document.getElementById('btnShot').onclick = downloadSnapshot;
+
+/* Автоподбор качества. Понижаем уровень, если частота кадров держится
+   низкой — и только понижаем: авто-повышение приводило бы к качелям, когда
+   на границе уровень скачет туда-сюда каждые пару секунд. Поднять можно
+   вручную из панели. */
+let slowTime = 0;
+let autoTuneBudget = 2;      // не больше двух понижений за сеанс
+function autoTuneQuality(dt, fps) {
+  if (params.quality !== 'auto' || autoTuneBudget <= 0) return;
+  // первые полсекунды не считаем: там компиляция шейдеров и загрузка текстур
+  if (clock.elapsedTime < 1.5) return;
+
+  slowTime = fps < 24 ? slowTime + dt : 0;
+  if (slowTime < 1.5) return;
+
+  const i = QUALITY_ORDER.indexOf(activePresetName);
+  if (i > 0) {
+    autoTuneBudget--;
+    slowTime = 0;
+    applyQuality(QUALITY_ORDER[i - 1]);
+    console.log('Качество понижено до «' + activePreset.label + '»: ' +
+                Math.round(fps) + ' FPS');
+  } else {
+    autoTuneBudget = 0;       // ниже некуда
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+
+  controls.update();
+  if (mixer) {
+    mixer.update(dt);
+    // при анимации геометрия движется — карту теней приходится обновлять каждый кадр
+    renderer.shadowMap.needsUpdate = true;
+  }
+
+  renderFrame();
+
+  // fps
+  fpsAcc += dt; fpsCount++;
+  fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    const fps = fpsCount / fpsAcc;
+    document.getElementById('statFps').textContent =
+      'FPS: ' + Math.round(fps) + '  ·  ' + activePreset.label;
+    autoTuneQuality(fpsTimer, fps);
+    fpsAcc = 0; fpsCount = 0; fpsTimer = 0;
+  }
+}
+animate();
+
+// Небольшой отладочный хук в консоль браузера (необязательно для работы вьюера)
+window.viewer = {
+  scene, camera, renderer, controls, params, updateSun, frameObject, aoPass, sunLight, sky, THREE,
+  composer, snapshot, renderFrame, loadFbxFromUrl, volumetricPass,
+  loadHDRIFromFile, applySunFromHDRI, updateEnvironment, applyQuality,
+  getQuality: () => activePresetName,
+  getHdriInfo: () => ({
+    name: hdriName,
+    size: hdriTexture ? [hdriTexture.image.width, hdriTexture.image.height] : null,
+  }),
+  extractEmbeddedFbxData, buildEmbeddedMaterialTextureMap, loadFbxFromArrayBuffer, currentModelGetter: () => currentModel,
+};
+</script>
+</body>
+</html>
